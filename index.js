@@ -1,177 +1,202 @@
-// 1. IMPORTAR LOS "COMPAS"
-require('dotenv').config();
-const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors');
-const multer = require('multer');
-const cloudinary = require('cloudinary').v2;
+// ====================================================
+// ¡¡IMPORTANTE!! Usa tu URL de localhost para probar
+// ====================================================
+const API_URL = 'http://localhost:3000/productos';
 
-// 2. CONFIGURACIONES INICIALES
-const app = express();
-app.use(express.json());
-app.use(cors());
+// --- Referencias del DOM ---
+const formProducto = document.getElementById('form-producto');
+const tablaProductos = document.getElementById('tabla-productos');
+const imgPreview = document.getElementById('img-preview');
+const inputImagen = document.getElementById('imagen');
 
-// --- Configurar Cloudinary ---
-cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-    api_key: process.env.CLOUDINARY_API_KEY,
-    api_secret: process.env.CLOUDINARY_API_SECRET,
-    secure: true
+// (Referencias de Filtros ELIMINADAS)
+
+// Referencias del Modal de Edición
+const modalEditar = new bootstrap.Modal(document.getElementById('modal-editar'));
+const formEditar = document.getElementById('form-editar');
+const btnGuardarCambios = document.getElementById('btn-guardar-cambios');
+
+// Almacén global para los productos (se queda para la función de editar)
+let todosLosProductos = [];
+
+
+// --- Validación de Bootstrap (Se queda igual) ---
+(function () {
+    'use strict';
+    const forms = document.querySelectorAll('.needs-validation');
+    Array.from(forms).forEach(form => {
+        form.addEventListener('submit', event => {
+            if (!form.checkValidity()) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+            form.classList.add('was-validated');
+        }, false);
+    });
+})();
+
+// --- Previsualización de Imagen (Se queda igual) ---
+inputImagen.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) {
+        const reader = new FileReader();
+        reader.onload = function(event) {
+            imgPreview.src = event.target.result;
+            imgPreview.style.display = 'block';
+        }
+        reader.readAsDataURL(file);
+    } else {
+        imgPreview.src = '';
+        imgPreview.style.display = 'none';
+    }
 });
 
-// --- Configurar Multer ---
-const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
+// --- (Sección de Filtros ELIMINADA) ---
 
-// 3. CONECTAR A MONGO ATLAS
-mongoose.connect(process.env.MONGO_URI)
-    .then(() => console.log('¡Conectado a Mongo Atlas! 😎'))
-    .catch((err) => console.error('Error de conexión a Mongo:', err));
+// --- (MODIFICADO) Pintar la Tabla ---
+// (Simplificada: ya no llama a 'aplicarFiltros')
+function pintarTabla(productos) {
+    tablaProductos.innerHTML = ''; // Limpiar la tabla
 
-// 4. EL "MOLDE" (ESQUEMA)
-const productoSchema = new mongoose.Schema({
-    nombre: { type: String, required: true },
-    descripcion: String,
-    stock: { type: Number, default: 0 },
-    category: { type: String, required: true, default: 'General' },
-    imageUrl: { type: String, required: true },
-    public_id: { type: String, required: true } // ID de Cloudinary para borrar
-});
+    if (productos.length === 0) {
+        tablaProductos.innerHTML = '<tr><td colspan="5" class="text-center">No hay productos en el almacén.</td></tr>';
+        return;
+    }
 
-const Producto = mongoose.model('Producto', productoSchema);
+    productos.forEach(prod => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td>
+                <img src="${prod.imageUrl}" alt="${prod.nombre}" width="75" class="img-thumbnail">
+            </td>
+            <td>${prod.nombre}</td>
+            <td><span class="badge bg-secondary">${prod.category}</span></td>
+            <td>${prod.stock}</td>
+            <td>
+                <button class="btn btn-warning btn-sm" 
+                    onclick="abrirModalEditar('${prod._id}')">
+                    Editar
+                </button>
+                <button class="btn btn-danger btn-sm" 
+                    onclick="borrarProducto('${prod._id}')">
+                    Borrar
+                </button>
+            </td>
+        `;
+        tablaProductos.appendChild(tr);
+    });
+}
 
-// 5. LAS "RECETAS" (RUTAS)
-
-// --- READ (Leer todos los productos) ---
-app.get('/productos', async (req, res) => {
+// --- READ (Cargar productos de la API) ---
+async function cargarProductos() {
     try {
-        const productos = await Producto.find();
-        res.json(productos);
+        const respuesta = await fetch(API_URL);
+        todosLosProductos = await respuesta.json(); // Guardamos en el almacén global
+        
+        if (!respuesta.ok) throw new Error('Error al cargar productos');
+        
+        pintarTabla(todosLosProductos); // Pintamos la tabla con todos los productos
+
     } catch (error) {
-        res.status(500).json({ mensaje: 'Error al buscar productos' });
+        console.error('Error al cargar productos:', error);
+        tablaProductos.innerHTML = '<tr><td colspan="5" class="text-center text-danger">Error al cargar datos.</td></tr>';
     }
-});
+}
 
-// --- CREATE (Crear un producto CON IMAGEN) ---
-app.post('/productos', upload.single('imagen'), async (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({ mensaje: '¡Error! No se subió ningún archivo.' });
+// --- CREATE (Se queda igual) ---
+formProducto.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!formProducto.checkValidity()) {
+        formProducto.classList.add('was-validated');
+        return;
     }
-
+    const formData = new FormData(formProducto);
+    const btnSubmit = formProducto.querySelector('button[type="submit"]');
+    btnSubmit.disabled = true;
+    btnSubmit.innerText = 'Guardando...';
     try {
-        // Subimos a Cloudinary
-        const cloudinaryResponse = await new Promise((resolve, reject) => {
-            const uploadStream = cloudinary.uploader.upload_stream(
-                { folder: 'almacen-productos' },
-                (error, result) => {
-                    if (error) return reject(error);
-                    resolve(result);
-                }
-            );
-            uploadStream.end(req.file.buffer);
+        const respuesta = await fetch(API_URL, {
+            method: 'POST',
+            body: formData 
         });
-
-        // Guardamos en Mongo
-        const nuevoProducto = new Producto({
-            nombre: req.body.nombre,
-            descripcion: req.body.descripcion,
-            stock: req.body.stock,
-            category: req.body.category, // <-- Guardamos la categoría
-            imageUrl: cloudinaryResponse.secure_url,
-            public_id: cloudinaryResponse.public_id // <-- Guardamos el ID de la imagen
-        });
-
-        await nuevoProducto.save();
-        res.status(201).json(nuevoProducto);
-
+        const nuevoProducto = await respuesta.json();
+        if (!respuesta.ok) {
+            throw new Error(nuevoProducto.mensaje || 'Error al crear el producto');
+        }
+        console.log('Producto creado:', nuevoProducto);
+        formProducto.reset();
+        formProducto.classList.remove('was-validated');
+        imgPreview.style.display = 'none';
+        cargarProductos();
     } catch (error) {
         console.error('Error al crear producto:', error);
-        res.status(500).json({ mensaje: 'Error en el servidor' });
+        alert('Error al crear producto: ' + error.message);
+    } finally {
+        btnSubmit.disabled = false;
+        btnSubmit.innerText = 'Guardar Producto';
     }
 });
 
-// --- (NUEVA RUTA) DELETE (Borrar un producto) ---
-app.delete('/productos/:id', async (req, res) => {
+// --- DELETE (Se queda igual) ---
+async function borrarProducto(id) {
+    if (!confirm('¿Seguro que quieres borrar este producto? Esta acción no se puede deshacer.')) {
+        return;
+    }
     try {
-        const id = req.params.id;
-        
-        // 1. Buscar el producto en Mongo
-        const producto = await Producto.findById(id);
-        if (!producto) {
-            return res.status(404).json({ mensaje: 'Producto no encontrado' });
+        const respuesta = await fetch(`${API_URL}/${id}`, {
+            method: 'DELETE'
+        });
+        const data = await respuesta.json();
+        if (!respuesta.ok) {
+            throw new Error(data.mensaje || 'Error al borrar');
         }
-
-        // 2. Borrar la imagen de Cloudinary usando su public_id
-        await cloudinary.uploader.destroy(producto.public_id);
-        
-        // 3. Borrar el producto de Mongo
-        await Producto.findByIdAndDelete(id);
-
-        res.json({ mensaje: 'Producto y su imagen borrados exitosamente' });
-
+        console.log(data.mensaje);
+        cargarProductos();
     } catch (error) {
-        console.error('Error al borrar producto:', error);
-        res.status(500).json({ mensaje: 'Error en el servidor' });
+        console.error('Error al borrar:', error);
+        alert('Error al borrar: ' + error.message);
     }
-});
+}
 
-// --- (NUEVA RUTA) UPDATE (Editar un producto) ---
-// Esta es la más compleja.
-// Acepta una imagen (opcional)
-app.put('/productos/:id', upload.single('imagen'), async (req, res) => {
+// --- UPDATE (Se queda igual) ---
+function abrirModalEditar(id) {
+    const producto = todosLosProductos.find(p => p._id === id);
+    if (!producto) return;
+    document.getElementById('edit-id').value = producto._id;
+    document.getElementById('edit-nombre').value = producto.nombre;
+    document.getElementById('edit-descripcion').value = producto.descripcion;
+    document.getElementById('edit-stock').value = producto.stock;
+    document.getElementById('edit-category').value = producto.category;
+    document.getElementById('edit-imagen').value = '';
+    modalEditar.show();
+}
+
+btnGuardarCambios.addEventListener('click', async () => {
+    const formData = new FormData(formEditar);
+    const id = formData.get('id');
+    btnGuardarCambios.disabled = true;
+    btnGuardarCambios.innerText = 'Guardando...';
     try {
-        const id = req.params.id;
-        
-        // 1. Busca el producto que vamos a editar
-        const producto = await Producto.findById(id);
-        if (!producto) {
-            return res.status(404).json({ mensaje: 'Producto no encontrado' });
+        const respuesta = await fetch(`${API_URL}/${id}`, {
+            method: 'PUT',
+            body: formData
+        });
+        const productoActualizado = await respuesta.json();
+        if (!respuesta.ok) {
+            throw new Error(productoActualizado.mensaje || 'Error al actualizar');
         }
-
-        // 2. Prepara los datos a actualizar
-        const datosActualizados = {
-            nombre: req.body.nombre || producto.nombre,
-            descripcion: req.body.descripcion || producto.descripcion,
-            stock: req.body.stock || producto.stock,
-            category: req.body.category || producto.category
-        };
-
-        // 3. ¿El usuario mandó una FOTO NUEVA?
-        if (req.file) {
-            console.log("¡Reemplazando imagen!");
-            // 3a. Borra la imagen VIEJA de Cloudinary
-            await cloudinary.uploader.destroy(producto.public_id);
-
-            // 3b. Sube la imagen NUEVA a Cloudinary
-            const cloudinaryResponse = await new Promise((resolve, reject) => {
-                const uploadStream = cloudinary.uploader.upload_stream(
-                    { folder: 'almacen-productos' },
-                    (error, result) => {
-                        if (error) return reject(error);
-                        resolve(result);
-                    }
-                );
-                uploadStream.end(req.file.buffer);
-            });
-
-            // 3c. Añade las nuevas URLs al objeto de actualización
-            datosActualizados.imageUrl = cloudinaryResponse.secure_url;
-            datosActualizados.public_id = cloudinaryResponse.public_id;
-        }
-
-        // 4. Actualiza el producto en Mongo
-        const productoActualizado = await Producto.findByIdAndUpdate(id, datosActualizados, { new: true });
-
-        res.json(productoActualizado);
-
+        console.log('Producto actualizado:', productoActualizado);
+        modalEditar.hide();
+        cargarProductos();
     } catch (error) {
-        console.error('Error al actualizar producto:', error);
-        res.status(500).json({ mensaje: 'Error en el servidor' });
+        console.error('Error al actualizar:', error);
+        alert('Error al actualizar: ' + error.message);
+    } finally {
+        btnGuardarCambios.disabled = false;
+        btnGuardarCambios.innerText = 'Guardar Cambios';
     }
 });
 
-// 6. ARRANCAR EL SERVIDOR
-const PORT = 3000;
-app.listen(PORT, () => {
-    console.log(`¡API de Almacén v2.0 corriendo en http://localhost:${PORT}! 🚀`);
-});
+
+// --- ¡Arrancamos! ---
+cargarProductos();
